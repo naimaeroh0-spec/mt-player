@@ -1,0 +1,93 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>mt-player</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  #p { position: absolute; inset: 0; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div id="p"></div>
+<script>
+/*
+  Relay player for the "YouTube Multi-Tracks" userscript.
+  Host this file on any domain that is NOT youtube.com (GitHub Pages, Netlify, Cloudflare Pages...).
+  It only talks to https://www.youtube.com (the page running the userscript).
+*/
+var PARENT = 'https://www.youtube.com';
+var qs = new URLSearchParams(location.search);
+var vid = qs.get('v');
+var start = parseInt(qs.get('start') || '0', 10) || 0;
+var autoplay = qs.get('autoplay') === '1' ? 1 : 0;
+
+var player = null, ready = false, lastError = null, timer = null;
+
+function send(obj) {
+  try { parent.postMessage(JSON.stringify(obj), PARENT); } catch (e) {}
+}
+
+function sendInfo() {
+  if (!ready || !player) return;
+  send({
+    event: 'infoDelivery',
+    info: {
+      currentTime: player.getCurrentTime(),
+      playerState: player.getPlayerState(),
+      duration: player.getDuration()
+    }
+  });
+}
+
+// YouTube IFrame API loader
+var tag = document.createElement('script');
+tag.src = 'https://www.youtube.com/iframe_api';
+document.head.appendChild(tag);
+
+window.onYouTubeIframeAPIReady = function () {
+  player = new YT.Player('p', {
+    videoId: vid,
+    width: '100%',
+    height: '100%',
+    playerVars: {
+      autoplay: autoplay, controls: 0, disablekb: 1, fs: 0, iv_load_policy: 3,
+      modestbranding: 1, playsinline: 1, rel: 0, mute: 1, start: start,
+      origin: location.origin
+    },
+    events: {
+      onReady: function () {
+        ready = true;
+        send({ event: 'onReady' });
+        timer = setInterval(sendInfo, 250);
+      },
+      onStateChange: function (e) { send({ event: 'onStateChange', info: e.data }); },
+      onError: function (e) { lastError = e.data; send({ event: 'onError', info: e.data }); }
+    }
+  });
+};
+
+var ALLOWED = {
+  playVideo: 1, pauseVideo: 1, seekTo: 1, setVolume: 1,
+  mute: 1, unMute: 1, setPlaybackRate: 1
+};
+
+window.addEventListener('message', function (e) {
+  if (e.origin !== PARENT) return;
+  var m = e.data;
+  if (typeof m === 'string') { try { m = JSON.parse(m); } catch (_) { return; } }
+  if (!m) return;
+
+  if (m.event === 'listening') {            // handshake from the userscript
+    if (lastError !== null) send({ event: 'onError', info: lastError });
+    else if (ready) { send({ event: 'onReady' }); sendInfo(); }
+    return;
+  }
+  if (m.event === 'command' && ready && ALLOWED[m.func] && typeof player[m.func] === 'function') {
+    try { player[m.func].apply(player, m.args || []); } catch (_) {}
+  }
+});
+</script>
+</body>
+</html>
